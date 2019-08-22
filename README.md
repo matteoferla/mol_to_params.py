@@ -1,7 +1,11 @@
 # mol_to_params.py
 molfile_to_params.py ported to python 3.
 
-I am not the author, Ian W. Davis is. I just ported this code to the 21st century.
+This script generates a `.params` file from a ligand given as a mol/sdf/mdl file or a mol2 file. The `.params` file is the topology file for Rosetta and has to be specified with the flag `-in:file:extra_res_fa <file>` (Rosetta Relax, Score etc.)  and `-in:file:extra_res_cen <file>` (required by Remodel).
+
+
+## changes
+**I am not the author**, Ian W. Davis is. I just ported this code to the 21st century.
 So any issues, loveletters and royalty checks go to the original author.
 
 Original script is from http://www.pyrosetta.org/scripts.
@@ -13,5 +17,4 @@ Note that there were some additional changes required.
 * `isinstance(f, file)` to `isinstance(f, io.IOBase)` &mdash; why did they kill `file` in py3?
 * `sort(lambda a,b: cmp(a,b))` to sort(key=lambda a: a) &mdash; __cmp__ died with 2.
 * `dot <= 0` to `dt <= 0`
-
 
