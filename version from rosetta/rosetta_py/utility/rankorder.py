@@ -1,8 +1,11 @@
+#!/usr/bin/env python
+#
 # (c) Copyright Rosetta Commons Member Institutions.
 # (c) This file is part of the Rosetta software suite and is made available under license.
 # (c) The Rosetta software is developed by the contributing members of the Rosetta Commons.
 # (c) For more information, see http://www.rosettacommons.org. Questions about this can be
-# (c) addressed to University of Washington UW TechTransfer, email: license@u.washington.edu.
+# (c) addressed to University of Washington CoMotion, email: license@uw.edu.
+
 """
 The routines rank() and order() outputs the ranks and ordering of the elements of a list.
 Missing values are indicated by None and ranking have first, min, max, random alternatives just like in R.
@@ -48,9 +51,9 @@ def order(x, NoneIsLast = True, decreasing = False):
     if None not in x:
         #IWD  ix.sort(reverse = decreasing, key = lambda j : x[j])
         if(decreasing):
-            ix.sort(key= lambda a: -x[a])
+            ix.sort(key=lambda a: -x[a])
         else:
-            ix.sort(key= lambda a: x[a])
+            ix.sort(key=lambda a: x[a])
     else:
         # Handle None values properly.
         def key(i, x = x):
@@ -63,9 +66,9 @@ def order(x, NoneIsLast = True, decreasing = False):
         ix = list(range(n))
         #IWD  ix.sort(key=key, reverse=decreasing)
         if(decreasing):
-            ix.sort(lambda a,b: -cmp(key(a),key(b)))
+            ix.sort(key=key, reverse=True)
         else:
-            ix.sort(lambda a,b: cmp(key(a),key(b)))
+            ix.sort(key=key)
 
     if omitNone:
         n = len(x)

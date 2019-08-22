@@ -1,8 +1,11 @@
+#!/usr/bin/env python
+#
 # (c) Copyright Rosetta Commons Member Institutions.
 # (c) This file is part of the Rosetta software suite and is made available under license.
 # (c) The Rosetta software is developed by the contributing members of the Rosetta Commons.
 # (c) For more information, see http://www.rosettacommons.org. Questions about this can be
-# (c) addressed to University of Washington UW TechTransfer, email: license@u.washington.edu.
+# (c) addressed to University of Washington CoMotion, email: license@uw.edu.
+
 '''Utilities for reading and manipulating MDL Molfiles (.mol, .mdl) and SD files (.sdf)
 as well as Tripos MOL2 (.mol2) files.
 
@@ -18,10 +21,16 @@ See the official specification at http://tripos.com/data/support/mol2.pdf
 Author: Ian W. Davis
 '''
 
-import sys, math, copy
+import sys, math, copy, gzip
 
-try: set
-except: from sets import Set as set
+
+#open file normally or with gzip depending on the file extension
+def gz_open(file,mode):
+    extension = file.split(".")[-1]
+    if extension == "gz":
+        return gzip.open(file,mode)
+    else:
+        return open(file,mode)
 
 '''Dictionary of Rosetta atom names to plausible PDB atom names (element only)'''
 rosetta_to_pdb_names = {'CNH2':' C  ', 'COO ':' C  ', 'CH1 ':' C  ',
@@ -86,6 +95,7 @@ class Atom:
         self.is_ring = False
         self.ring_size = 0
         self.partial_charge = None
+        self.formal_charge = 0
 
     def copy(self):
         '''Return a semi-shallow copy of this Atom, with bonds[] and heavy_bonds[] set to empty lists.'''
@@ -195,7 +205,7 @@ def file_or_filename(func):
     '''A decorator for functions that interchangably take a file or filename as their first argument.'''
     def g(f, *args, **kwargs):
         if isinstance(f, str):
-            f = open(f, 'rU')
+            f = gz_open(f, 'r')
             ret = func(f, *args, **kwargs)
             #f.close()
             # Can't close files when we do it like this,
@@ -210,13 +220,24 @@ def file_or_filename(func):
     g.__dict__.update(func.__dict__)
     return g
 
+def assign_mdl_charges(line, atoms):
+    '''Assigns formal charges based on the MDL M  CHG line.'''
+    nentries = int(line[6:9])
+    line = line[9:].split()
+    if( nentries*2 != len(line) ):
+        print("Warning: Malformed charge line. Ignoring.")
+        return
+    for i in range(nentries):
+        atom = int(line[2*i]);
+        charge = int(line[2*i + 1])
+        atoms[atom-1].formal_charge = charge # 1 based to zero-based indexing
 
 def read_mdl_molfile(f, do_find_rings=True):
     '''Reads a molfile and returns a Molfile object.
 
     f may be a file name or file handle.'''
     if isinstance(f, str):
-        f = open(f, 'rU')
+        f = gz_open(f, 'r')
         ret = read_mdl_molfile(f)
         f.close()
         return ret
@@ -258,9 +279,31 @@ def read_mdl_molfile(f, do_find_rings=True):
         line = f.readline()
         if line == "" or line.startswith("$$$$"): break
         elif line.startswith("M  END"): continue
-        molfile.footer.append(line)
+        elif line.startswith("M  CHG"):
+            assign_mdl_charges(line, atoms)
+        else:
+            molfile.footer.append(line)
     if do_find_rings: find_rings(bonds)
     return molfile
+
+def write_mdl_charges(f, molfile, atom_idx):
+    charged_atoms = []
+    for a in molfile.atoms:
+        if a.formal_charge != 0:
+            charged_atoms.append(a)
+    # CHG lines can only have a maximum of 8 atoms
+    b = 0
+    e = 8
+    while b < len(charged_atoms):
+        end = min(e, len(charged_atoms) )
+        nentries = end-b
+        assert nentries <= 8
+        f.write("M  CHG%3d" % nentries)
+        for n in range(b,end):
+            f.write(" %3d %3d" % (atom_idx[charged_atoms[n]], charged_atoms[n].formal_charge) )
+        f.write("\n")
+        b += 8
+        e += 8
 
 def write_mdl_molfile(f, molfile):
     '''Writes a Molfile object to a file.
@@ -270,7 +313,7 @@ def write_mdl_molfile(f, molfile):
 
     f may be a file name or file handle.'''
     if isinstance(f, str):
-        f = open(f, 'w')
+        f = gz_open(f, 'w')
         write_mdl_molfile(f, molfile)
         f.close()
         return
@@ -291,6 +334,7 @@ def write_mdl_molfile(f, molfile):
     for b in molfile.bonds:
         # For now we discard the rest of the fields, so just make them zeros
         f.write("%3i%3i%3i  0  0  0  0\n" % (atom_idx[b.a1], atom_idx[b.a2], b.order))
+    write_mdl_charges(f, molfile, atom_idx)
     f.writelines(molfile.footer)
     f.write("M  END\n")
     f.flush() # close() ruins StringIO objects!
@@ -318,7 +362,7 @@ def write_mdl_sdf(f, molfiles):
 
     f may be a file name or file handle.'''
     if isinstance(f, str):
-        f = open(f, 'w')
+        f = gz_open(f, 'w')
         write_mdl_sdf(f, molfiles)
         f.close()
         return
@@ -390,7 +434,11 @@ def read_tripos_mol2(f, do_find_rings=True):
             atom = Atom(x, y, z, name, elem)
             atom.sybyl_type = f[5]
             if len(f) >= 7:
-                atom.rsd_id = int(f[6])
+                try:
+                    atom.rsd_id = int(f[6])
+                except ValueError:
+                    # Pymol produced mol2 files don't conform to the standard - ignore its error gracefully
+                    f = f[:6]
             if len(f) >= 8:
                 atom.rsd_name = f[7]
             if len(f) >= 9:
@@ -406,6 +454,11 @@ def read_tripos_mol2(f, do_find_rings=True):
             elif f[3] == "2": order = Bond.DOUBLE
             elif f[3] == "3": order = Bond.TRIPLE
             elif f[3] == "ar" or f[3] == "am": order = Bond.AROMATIC
+            elif f[3] == "du" or f[3] == "un" or f[3] == "nc":
+                print("NOTE: Bond of order '%s' treated as single bond." % f[3])
+                order = Bond.SINGLE
+            else:
+                raise ValueError("Unrecognized bond order '%s' on line %i" % ( f[3], line_num[0] ))
             bond = Bond(atom1, atom2, order)
             molfile.bonds.append(bond)
         else:
@@ -425,7 +478,7 @@ def write_tripos_mol2(f, molfiles):
 
     This function doesn't preserve everything, notably substructure records and amide bond types.'''
     if isinstance(f, str):
-        f = open(f, 'w')
+        f = gz_open(f, 'w')
         write_tripos_mol2(f, molfiles)
         f.close()
         return
@@ -464,10 +517,10 @@ def sort_for_rosetta(molfile):
     Heavy atoms precede hydrogens, and bonds define a tree.'''
     m = molfile
     # Sort atoms so all H go to the end
-    m.atoms.sort(lambda a,b: cmp(a.is_H, b.is_H))
+    m.atoms.sort(key=lambda a: a.is_H())
     # Direct bonds so lesser atom index comes first
     ai = index_atoms(m.atoms) # atom indices
-    bs = [];
+    bs = []
     for b in m.bonds:
         if(ai[b.a1] <= ai[b.a2]): bs.append(b)
         else: bs.append(b.mirror)
@@ -477,10 +530,17 @@ def sort_for_rosetta(molfile):
     # (2) every bond goes from a known atom to a (new or known) atom.
     # This defines an implicit tree.
     def bond_cmp(b1, b2):
-        c = cmp(ai[b1.a1], ai[b2.a1])
-        if c == 0: c = cmp(ai[b1.a2], ai[b2.a2])
-        return c
-    bs.sort(bond_cmp)
+        if ai[b1.a1] < ai[b2.a1]:
+            return -1
+        elif ai[b1.a1] > ai[b2.a1]:
+            return 1
+        elif ai[b1.a2] < ai[b2.a2]:
+            return -1
+        elif ai[b1.a2] > ai[b2.a2]:
+            return 1
+        else:
+            return 0
+    bs.sort(cmp=bond_cmp)
     m.bonds = bs
 
 def strip_H(molfile, pred=lambda x: x.is_H):

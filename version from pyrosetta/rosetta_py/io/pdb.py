@@ -237,4 +237,4 @@ def standardize_atom_names(atoms, move_to_segid=True):
 
 def sort_H_to_end(atoms):
     '''In-place stable sort of hydrogens after all heavy atoms, like Rosetta'''
-    atoms.sort(lambda a,b: cmp(a.is_H(), b.is_H()))
+    atoms.sort(key=lambda a: a.is_H())
