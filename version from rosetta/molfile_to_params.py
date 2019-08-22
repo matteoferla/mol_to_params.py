@@ -23,9 +23,9 @@ from optparse import OptionParser, IndentedHelpFormatter
 # Magic spell to make sure Rosetta python libs are on the PYTHONPATH:
 sys.path.append( os.path.dirname(os.path.dirname( os.path.abspath(sys.path[0]) )) )
 
-from .rosetta_py.io.mdl_molfile import * #gz_open come from here.
-from .rosetta_py.utility.rankorder import argmin, order
-from .rosetta_py.utility import r3
+from rosetta_py.io.mdl_molfile import * #gz_open come from here.
+from rosetta_py.utility.rankorder import argmin, order
+from rosetta_py.utility import r3
 
 # Better handle multiple paragraph descriptions.
 class PreformattedDescFormatter (IndentedHelpFormatter):
@@ -1315,6 +1315,192 @@ def write_all_files(m, molfiles, num_frags, options, suffix=""): #{{{
 
     return 0
 #}}}
+def core(infile, options):
+    ctr = None
+    if options.center:
+        f = options.center.split(",")
+        if len(f) != 3:
+            f = options.center.split()
+            if len(f) != 3:
+                print("Must say -center 'X,Y,Z'")
+                return 5
+        ctr = r3.Triple(float(f[0]), float(f[1]), float(f[2]))
+        # print "Centering ligands at %s" % ctr
+
+    # There's a very strong order dependence to these function calls:
+    # many depend on atom/bond variables set by earlier calls.
+    infile_lc = infile.lower()
+    if infile_lc.endswith(".mol2") or infile_lc.endswith(".mol2.gz"):
+        molfiles = list(read_tripos_mol2(infile, do_find_rings=False))
+    elif infile_lc.endswith(".mol") or infile_lc.endswith(".mdl") or infile_lc.endswith(".sdf") or \
+            infile_lc.endswith(".mol.gz") or infile_lc.endswith(".mdl.gz") or infile_lc.endswith(".sdf.gz"):
+        molfiles = list(read_mdl_sdf(infile, do_find_rings=False))
+    else:
+        print("Unrecognized file type, must be .mol/.sdf or .mol2!")
+        return 6
+    # Add additional M_____ control records, if any specified.
+    if options.m_ctrl is not None:
+        m_ctrl = gz_open(options.m_ctrl, 'r')
+        try:
+            footer = m_ctrl.readlines()
+        finally:
+            m_ctrl.close()
+        for molfile in molfiles:
+            molfile.footer.extend(footer)
+    m = molfiles[0]
+    # Only doing ring detection for the first entry (the only one that needs it)
+    # saves a LOT of compute time (~90%) for large input files.
+    find_rings(m.bonds)
+    # If -center not given, default is to center like first entry
+    if ctr is None:
+        ctr = r3.centroid([a for a in m.atoms if not a.is_H])
+    print("Centering ligands at %s" % ctr)
+    options.center = ctr
+
+    mark_fragments(m)
+    add_fields_to_atoms(m.atoms)
+    add_fields_to_bonds(m.bonds)
+    find_virtual_atoms(m.atoms)
+    if uniquify_atom_names(m.atoms, force=(not options.keep_names)):
+        print("Atom names contain duplications -- renaming all atoms.")
+    for atom in m.atoms: atom.name = pdb_pad_atom_name(atom)  # for output convenience
+    check_bond_count(m.atoms)
+    check_aromaticity(m.bonds)
+    check_hydrogens(m.atoms)
+    assign_rosetta_types(m.atoms)
+    assign_mm_types(m.atoms, options.mm_as_virt)
+    assign_centroid_types(m.atoms)
+    if options.amino_acid is not None: setup_amino_acid(m.atoms, molfiles)
+    net_charge = 0.0
+    if options.recharge is not None:
+        net_charge = float(options.recharge)
+    else:
+        # Handle official MDL format formal charges.
+        for a in m.atoms:
+            net_charge += a.formal_charge
+        # KWK's convention -- difference is one space versus two.
+        for line in m.footer:
+            if line.startswith("M CHG"): net_charge = float(line[5:])
+    assign_partial_charges(m.atoms, net_charge, options.recharge is not None)
+    assign_rotatable_bonds(m.bonds)
+    assign_rigid_ids(m.atoms)
+    num_frags = fragment_ligand(m)
+    build_fragment_trees(m, options)
+    assign_internal_coords(m)
+    # uniquify_atom_names(m.atoms)
+
+    # All-atom output
+    if options.centroid:
+        ret = write_all_files(m, molfiles, num_frags, options, suffix=".fa")
+    else:
+        ret = write_all_files(m, molfiles, num_frags, options, suffix="")
+    if ret != 0: return ret
+
+    # Centroid mode now
+    if options.centroid:
+        strip_H(m, lambda a: a.cen_type is None)
+        for a in m.atoms: a.ros_type, a.cen_type = a.cen_type, a.ros_type
+        build_fragment_trees(m, options)
+        assign_internal_coords(m)
+        ret = write_all_files(m, molfiles, num_frags, options, suffix=".cen")
+        if ret != 0: return ret
+    return 0
+
+from types import SimpleNamespace
+
+
+def run(infile,
+        name='LIG',
+        pdb=None,
+        centroid=False,
+        chain='X',
+        center=None,
+        max_confs=5000,
+        root_atom=None,
+        nbr_atom=None,
+        kinemage=None,
+        amino_acid=None,
+        clobber=False,
+        no_param=False,
+        no_pdb=False,
+        extra_torsion_output=False,
+        keep_names=False,
+        long_names=False,
+        recharge=None,
+        m_ctrl=None,
+        mm_as_virt=False,
+        skip_bad_conformers=False,
+        conformers_in_one_file=False
+       ):
+    """
+    infile: INPUT.mol | INPUT.sdf | INPUT.mol2
+    name: name ligand residues NM1,NM2,... instead of LG1,LG2,...
+    pdb: prefix for PDB file names
+    centroid: write files for Rosetta centroid mode too
+    chain: The chain letter to use for the output PDB ligand.
+    center: translate output PDB coords to have given heavy-atom centroid
+    max_confs: don't expand proton chis if above this many total confs
+    root_atom: which atom in the molfile is the root? (indexed from 1)
+    nbr_atom: which atom in the molfile is the nbr atom? (indexed from 1)
+    kinemage: write ligand topology to FILE
+    amino_acid: set up params file for modified amino acid; .mol2 only; edit chis afterward.  Implies --keep-names.
+    clobber: overwrite existing files
+    no_param: skip writing .params files (for debugging)
+    no_pdb: skip writing .pdb files (for debugging)
+    extra_torsion_output: writing additional torsion files
+    keep_names: leaves atom names untouched except for duplications
+    long_names: if specified name is longer than 3 letters, keep entire name in param NAME field instead of truncating
+    recharge: ignore existing partial charges, setting total charge to CHG
+    m_ctrl: read additional M control lines from FILE
+    mm_as_virt: assign mm atom types as VIRT, rather than X
+    skip_bad_conformers: If a conformer has atoms in the wrong order, skip it and continue rather than dying
+    conformers_in_one_file: Output 1st conformer to NAME.pdb and all others to NAME_conformers.pdb
+    Original documentation.
+    Converts a small molecule in an MDL Molfile with "M SPLT" and "M ROOT"
+    records into a series of .params residue definition files for Rosetta.
+    Also writes out the ligand conformation as PDB HETATMs.
+
+    If an SD file is given as input instead, the first entry is used for
+    generating topology / parameter files, and they all are used for
+    generating PDB-style coordinates in separate, numbered files.
+    These multiple files can optionally be concatenated into a single file,
+    which can then be specified with an additional PDB_ROTAMERS line in the
+    .params file to include the extra conformations as ligand rotamers.
+    Multiple models may also be supplied in MOL2 format, which does not support
+    M ROOT and M SPLT records but does allow for partial charges.
+    File type is deduced from the extension.
+
+    To divide a ligand into fragments by "breaking" bonds (optional):
+    M SPLT atom_no1 atom_no2
+
+    To specify a neighbor atom for a ligand fragment (optional):
+    M NBR atom_no
+
+    To specify a root atom for a ligand fragment (optional):
+    M ROOT atom_no
+
+    The "M" records (M SPLT, M NBR, M ROOT) can alternatively be specified in
+    a separate control file, which can be used with MOL2 format files.
+
+    Note that for ligands with multiple rotamers, Rosetta overlays the ligands
+    based on the neighbor atom (not the root atom), such that the position of the
+    neighbor atom and the orientation of the atoms bonded to the neighbor atom is
+    the same. When using ligand rotamers, it is recommended to confirm that the
+    neighbor atom falls in an appropriate position.
+
+    Expects that the input ligand has already had aromaticity "perceived",
+    i.e. that it contains aromatic bonds rather than alternating single and double
+    bonds (Kekule structure).
+
+    Optionally writes a kinemage graphics visualization of the atom tree,
+    neighbor atom selection, fragments, etc -- very helpful for debugging
+    and for visualizing exactly what was done to the ligand.
+    """
+    fields = ['name', 'pdb', 'centroid', 'chain', 'center', 'max_confs', 'root_atom', 'nbr_atom', 'kinemage', 'amino_acid', 'clobber', 'no_param', 'no_pdb', 'extra_torsion_output', 'keep_names', 'long_names', 'recharge', 'm_ctrl', 'mm_as_virt', 'skip_bad_conformers', 'conformers_in_one_file']
+    options = SimpleNamespace(**{k: v for k, v in locals().items() if k in fields})
+    # namedtuple does not work as it has to change.
+    core(infile, options)
+
 def main(argv): #{{{
     """
 Converts a small molecule in an MDL Molfile with "M SPLT" and "M ROOT"
@@ -1491,96 +1677,7 @@ and for visualizing exactly what was done to the ligand.
         parser.print_help()
         print("Too many arguments!")
         return 1
-
-    ctr = None
-    if options.center:
-        f = options.center.split(",")
-        if len(f) != 3:
-            f = options.center.split()
-            if len(f) != 3:
-                print("Must say -center 'X,Y,Z'")
-                return 5
-        ctr = r3.Triple( float(f[0]), float(f[1]), float(f[2]) )
-        #print "Centering ligands at %s" % ctr
-
-    # There's a very strong order dependence to these function calls:
-    # many depend on atom/bond variables set by earlier calls.
-    infile_lc = infile.lower()
-    if infile_lc.endswith(".mol2") or infile_lc.endswith(".mol2.gz"):
-        molfiles = list(read_tripos_mol2(infile, do_find_rings=False))
-    elif infile_lc.endswith(".mol") or infile_lc.endswith(".mdl") or infile_lc.endswith(".sdf") or \
-			infile_lc.endswith(".mol.gz") or infile_lc.endswith(".mdl.gz") or infile_lc.endswith(".sdf.gz"):
-        molfiles = list(read_mdl_sdf(infile, do_find_rings=False))
-    else:
-        print("Unrecognized file type, must be .mol/.sdf or .mol2!")
-        return 6
-    # Add additional M_____ control records, if any specified.
-    if options.m_ctrl is not None:
-        m_ctrl = gz_open(options.m_ctrl,'r')
-        try:
-            footer = m_ctrl.readlines()
-        finally:
-            m_ctrl.close()
-        for molfile in molfiles:
-            molfile.footer.extend(footer)
-    m = molfiles[0]
-    # Only doing ring detection for the first entry (the only one that needs it)
-    # saves a LOT of compute time (~90%) for large input files.
-    find_rings(m.bonds)
-    # If -center not given, default is to center like first entry
-    if ctr is None:
-        ctr = r3.centroid([a for a in m.atoms if not a.is_H])
-    print("Centering ligands at %s" % ctr)
-    options.center = ctr
-
-    mark_fragments(m)
-    add_fields_to_atoms(m.atoms)
-    add_fields_to_bonds(m.bonds)
-    find_virtual_atoms(m.atoms)
-    if uniquify_atom_names(m.atoms, force=(not options.keep_names)):
-        print("Atom names contain duplications -- renaming all atoms.")
-    for atom in m.atoms: atom.name = pdb_pad_atom_name(atom) # for output convenience
-    check_bond_count(m.atoms)
-    check_aromaticity(m.bonds)
-    check_hydrogens(m.atoms)
-    assign_rosetta_types(m.atoms)
-    assign_mm_types(m.atoms,options.mm_as_virt)
-    assign_centroid_types(m.atoms)
-    if options.amino_acid is not None: setup_amino_acid(m.atoms, molfiles)
-    net_charge = 0.0
-    if options.recharge is not None:
-        net_charge = float(options.recharge)
-    else:
-        #Handle official MDL format formal charges.
-        for a in m.atoms:
-            net_charge += a.formal_charge
-        # KWK's convention -- difference is one space versus two.
-        for line in m.footer:
-            if line.startswith("M CHG"): net_charge = float(line[5:])
-    assign_partial_charges(m.atoms, net_charge, options.recharge is not None)
-    assign_rotatable_bonds(m.bonds)
-    assign_rigid_ids(m.atoms)
-    num_frags = fragment_ligand(m)
-    build_fragment_trees(m, options)
-    assign_internal_coords(m)
-    #uniquify_atom_names(m.atoms)
-
-    # All-atom output
-    if options.centroid:
-        ret = write_all_files(m, molfiles, num_frags, options, suffix=".fa")
-    else:
-        ret = write_all_files(m, molfiles, num_frags, options, suffix="")
-    if ret != 0: return ret
-
-    # Centroid mode now
-    if options.centroid:
-        strip_H(m, lambda a: a.cen_type is None)
-        for a in m.atoms: a.ros_type, a.cen_type = a.cen_type, a.ros_type
-        build_fragment_trees(m, options)
-        assign_internal_coords(m)
-        ret = write_all_files(m, molfiles, num_frags, options, suffix=".cen")
-        if ret != 0: return ret
-
+    core(infile, options)
     return 0
 
 if __name__ == "__main__":

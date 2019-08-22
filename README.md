@@ -8,7 +8,7 @@ This script generates a `.params` file from a ligand given as a mol/sdf/mdl file
 So turns out that the version shipped with Rosetta is longer and has more functionality.
 
 ## changes
-**I am not the author**, Ian W. Davis is. I just ported this code to the 21st century.
+**I am not the author**, Ian W. Davis is. I just ported this code to the 2nd decade of 21st century.
 So any issues, loveletters and royalty checks go to the original author.
 
 Original script is from http://www.pyrosetta.org/scripts.
@@ -20,4 +20,12 @@ Note that there were some additional changes required.
 * `isinstance(f, file)` to `isinstance(f, io.IOBase)` &mdash; why did they kill `file` in py3?
 * `sort(lambda a,b: cmp(a,b))` to sort(key=lambda a: a) &mdash; __cmp__ died with 2.
 * `dot <= 0` to `dt <= 0`
+
+## mod
+The Rosetta version has a wee mod. It contains a method called `run` making it more usable as a module.
+
+>>> import molfile_to_params
+>>> molfile_to_params.run('xxx.mol2', name='XXX', amino_acid=True)
+
+The key-arguments are the same as the ones for the parser and are written in full so the IDE can hint them.
 
