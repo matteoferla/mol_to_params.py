@@ -3,6 +3,9 @@ molfile_to_params.py ported to python 3.
 
 This script generates a `.params` file from a ligand given as a mol/sdf/mdl file or a mol2 file. The `.params` file is the topology file for Rosetta and has to be specified with the flag `-in:file:extra_res_fa <file>` (Rosetta Relax, Score etc.)  and `-in:file:extra_res_cen <file>` (required by Remodel).
 
+## versions
+
+So turns out that the version shipped with Rosetta is longer and has more functionality.
 
 ## changes
 **I am not the author**, Ian W. Davis is. I just ported this code to the 21st century.
