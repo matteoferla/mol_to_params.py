@@ -5,7 +5,7 @@ This script generates a `.params` file from a ligand given as a mol/sdf/mdl file
 
 ## versions
 
-So turns out that the version shipped with Rosetta is longer and has more functionality.
+The version shipped with Rosetta is longer and has more functionality. Why? No idea.
 
 ## changes
 **I am not the author**, Ian W. Davis is. I just ported this code to the 2nd decade of 21st century.
@@ -24,8 +24,8 @@ Note that there were some additional changes required.
 ## mod
 The Rosetta version has a wee mod. It contains a method called `run` making it more usable as a module.
 
->>> import molfile_to_params
->>> molfile_to_params.run('xxx.mol2', name='XXX', amino_acid=True)
+    import molfile_to_params
+    molfile_to_params.run('xxx.mol2', name='XXX', amino_acid=True)
 
 The key-arguments are the same as the ones for the parser and are written in full so the IDE can hint them.
 
