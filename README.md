@@ -1,10 +1,8 @@
 # mol_to_params.py
 `molfile_to_params.py` ported to python 3.
 
-> I cannot keep this file on Github due to Rosetta's academic licence, which is incompatible.
-> Even if this is a python script you can download online freely.
-> If you email me I might give you some suggestion on how to make your own or something.
-> I am told that a python3 version will be released with Rosetta 3.12
+> Please see [https://github.com/matteoferla/rdkit_to_params](rdkit_to_params), which is a complete rewrite.
+> I have taken down this 2to3 port as it was incompatible with Rosetta's academic licence.
 
 The `molfile_to_params.py` generates a `.params` file from a ligand given as a mol/sdf/mdl file or a mol2 file. The `.params` file is the topology file for Rosetta and has to be specified with the flag `-in:file:extra_res_fa <file>` (Rosetta Relax, Score etc.)  and `-in:file:extra_res_cen <file>` (required by Remodel).
 
